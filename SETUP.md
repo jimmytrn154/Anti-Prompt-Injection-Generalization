@@ -27,3 +27,12 @@ The last line should end with `All checks passed.` The first run downloads the t
 **GPU (for M3 fine-tuning):** install the CUDA build of PyTorch from <https://pytorch.org/get-started/locally/> *before* `pip install -r requirements.txt`.
 
 **VS Code:** `Ctrl+Shift+P` → "Python: Select Interpreter" → pick `.venv`.
+
+## Data (workstream A)
+
+```powershell
+python -m src.data.download      # ~10 min first time; saves to data/raw/ (git-ignored)
+python -m src.data.inspect_raw   # writes reports/data/raw_inspection.md
+```
+
+Raw data never goes into Git. Licences are listed in `data/LICENSES.md`.

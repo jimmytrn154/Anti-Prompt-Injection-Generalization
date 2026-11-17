@@ -1,0 +1,10 @@
+source,class,rows,empty,exact_dups,tok_median,tok_p95,tok_max,in_5_300,under_5,over_300,over_512,languages
+deepset,attack,263,0,0,33,152,983,259,2,2,1,"en 58%, de 38%, es 2%, nl 2%"
+deepset,benign,399,0,0,11,53,109,374,25,0,0,"en 52%, de 46%, fr 1%, nl 0%"
+gandalf,attack,1000,0,1,11,34,98,926,74,0,0,"en 99%, fr 0%, de 0%, es 0%"
+jailbreak,attack,666,0,18,354,1076,4809,283,0,383,228,"en 100%, de 0%, fr 0%, unknown 0%"
+jailbreak,benign,640,0,2,50,445,2435,582,0,58,21,"en 99%, tr 0%, ja 0%, ru 0%"
+tensortrust,attack,9829,0,1195,25,497,27674,6529,1201,2099,320,"en 68%, de 19%, it 3%, ru 2% (sample of 3000)"
+dolly,benign,15011,0,250,12,37,6405,14745,249,17,6,"en 98%, de 1%, es 0%, nl 0% (sample of 3000)"
+alpaca,benign,52002,0,0,14,38,503,51879,120,3,0,"en 100%, de 0%, nl 0%, fr 0% (sample of 3000)"
+notinject,benign,339,0,0,20,35,55,339,0,0,0,"en 75%, zh 24%, ru 1%, es 0%"
