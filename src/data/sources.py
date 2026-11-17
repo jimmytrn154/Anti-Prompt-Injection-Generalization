@@ -96,8 +96,11 @@ def _load_jailbreak() -> pd.DataFrame:
 
 def _load_dolly() -> pd.DataFrame:
     df = _read_hf_splits("dolly")
-    # instruction only; the optional `context` is long reference text (team decision pending)
-    out = _tidy(df, df["instruction"], 0)
+    # instruction + optional reference passage: gives realistic long benign prompts,
+    # needed to length-match long attacks (team decision, Nov 17)
+    ctx = df["context"].fillna("").str.strip()
+    text = df["instruction"].str.strip() + ctx.map(lambda s: f"\n\n{s}" if s else "")
+    out = _tidy(df, text, 0)
     out["category"] = df["category"].astype("string")
     return out
 

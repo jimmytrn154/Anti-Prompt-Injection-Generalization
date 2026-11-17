@@ -18,8 +18,9 @@
 | `source` | string | A | `deepset`, `gandalf`, `jailbreak`, `tensortrust`, `dolly`, `alpaca`, `notinject` |
 | `subset` | string | A | `main` · `calibration` (≈3k benign for the 1% FPR threshold) · `notinject` (test only) |
 | `original_split` | string | A | Split name in the source dataset (provenance only, never used) |
-| `language` | string | A | ISO 639-1 code (`en`, `de`) |
+| `language` | string | A | ISO 639-1 code (`en`, `de`), or `und` when undetermined (short, padded or homoglyph-obfuscated text) |
 | `n_tokens` | int | A | Length with the shared tokenizer (`TOKENIZER_NAME` in `check_env.py`) |
+| `category` | string | A | Category given by the source (Dolly, NotInject); empty otherwise |
 | `type` | string | A → B | `injection` / `jailbreak`. Attacks only. A pre-fills by source, B confirms |
 | `strategy_primary` | string | B | `S1` / `S2` / `S3`. Attacks only |
 | `strategy_secondary` | list | B | Zero or more of `S1`–`S3` (`[]` for none). Attacks only |
@@ -52,7 +53,7 @@ calib = df[df.subset == "calibration"]   # threshold at 1% FPR
 
 ## Open questions (A + B, this week)
 
-1. **Token cap:** the proposal says 5–300 tokens, but many jailbreak prompts are longer. Keep 300, raise to 512, or truncate? (A will post counts.)
+1. ~~Token cap~~ **Decided (Nov 17): 5–500 tokens**, plus long benign prompts (Dolly instruction + context) and length matching, verified by a length-only baseline.
 2. **Tokenizer:** confirm `TOKENIZER_NAME` with C so lengths match M3.
 3. **LODO benign for attack-only sources:** Gandalf and Tensor Trust have no benign data. Proposal: use a fixed held-out Dolly/Alpaca slice.
 4. **Ambiguous attacks in training:** allowed when the held-out strategy is not among their possible strategies?

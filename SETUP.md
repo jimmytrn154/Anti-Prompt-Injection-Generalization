@@ -33,6 +33,7 @@ The last line should end with `All checks passed.` The first run downloads the t
 ```powershell
 python -m src.data.download      # ~10 min first time; saves to data/raw/ (git-ignored)
 python -m src.data.inspect_raw   # writes reports/data/raw_inspection.md
+python -m src.data.preprocess    # ~10-20 min on CPU; writes data/processed/clean_v0.parquet + labeling pool
 ```
 
 Raw data never goes into Git. Licences are listed in `data/LICENSES.md`.

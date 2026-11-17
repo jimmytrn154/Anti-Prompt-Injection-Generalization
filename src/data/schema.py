@@ -44,6 +44,7 @@ COLUMNS = {
     "original_split":     ("string",  "A", "Split name in the source dataset (provenance only)"),
     "language":           ("string",  "A", "ISO 639-1 code, e.g. 'en', 'de'"),
     "n_tokens":           ("Int32",   "A", "Token count with the shared tokenizer (see check_env.py)"),
+    "category":           ("string",  "A", "Category given by the source (Dolly, NotInject); else empty"),
     "type":               ("string",  "A→B", "injection / jailbreak (attacks only; A pre-fills, B confirms)"),
     "strategy_primary":   ("string",  "B", "S1 / S2 / S3 (attacks only)"),
     "strategy_secondary": ("object",  "B", "List of zero or more of S1-S3 (attacks only)"),
