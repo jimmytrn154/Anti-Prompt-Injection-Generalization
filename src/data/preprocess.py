@@ -1,6 +1,7 @@
 """Phase 3: clean, filter and de-duplicate all sources into one table.  Run from the repo root:
 
-    python -m src.data.preprocess
+    python -m src.data.preprocess              # full run (~15 min on CPU)
+    python -m src.data.preprocess --pool-only  # only rebuild the labelling pool from saved outputs
 
 Steps (counts after each are written to the report):
   1. load every raw source (Dolly = instruction + context passage)
@@ -287,19 +288,36 @@ def run() -> None:
     np.save(PROC_DIR / "clean_v0_embeddings.npy", emb_all)   # reused for k-means / benign matching
 
     print(f"[9] Tensor Trust candidate pool ({TT_POOL:,}) by cluster sampling", flush=True)
-    tt_idx = np.flatnonzero(clean["source"] == "tensortrust")
-    pick = tt_idx[cluster_sample(emb_all[tt_idx], TT_POOL, TT_CLUSTERS, SEED)]
-    pool = pd.concat([clean[(clean["label"] == 1) & (clean["source"] != "tensortrust")], clean.iloc[pick]])
-    pool = pool[["id", "source", "type", "language", "n_tokens", "text"]].reset_index(drop=True)
-    for c in ["strategy_primary", "strategy_secondary", "ambiguous", "obfuscated", "notes"]:
-        pool[c] = None
-    pool.to_parquet(PROC_DIR / "labeling_pool_v0.parquet", index=False)
-    pool.to_csv(PROC_DIR / "labeling_pool_v0.csv", index=False, encoding="utf-8-sig")
+    pool = make_labeling_pool(clean, emb_all)
 
     removed = pd.concat(f.removed, ignore_index=True)
     removed.to_csv(PROC_DIR / "removal_log.csv", index=False, encoding="utf-8")
 
     write_report(f, clean, pool, removed, n_masked, n_conflict_rows, cross_pairs, time.time() - t0)
+
+
+def make_labeling_pool(clean: pd.DataFrame, emb_all: np.ndarray) -> pd.DataFrame:
+    """All cleaned non-Tensor-Trust attacks + TT_POOL diverse Tensor Trust attacks, with empty label columns."""
+    from src.data.schema import LABEL_COLUMNS
+    tt_idx = np.flatnonzero(clean["source"] == "tensortrust")
+    pick = tt_idx[cluster_sample(emb_all[tt_idx], TT_POOL, TT_CLUSTERS, SEED)]
+    pool = pd.concat([clean[(clean["label"] == 1) & (clean["source"] != "tensortrust")], clean.iloc[pick]])
+    pool = pool[["id", "source", "language", "n_tokens", "type", "text"]].reset_index(drop=True)
+    for c in LABEL_COLUMNS:
+        if c != "type":
+            pool[c] = None
+    pool = pool[["id", "source", "language", "n_tokens", "text", *LABEL_COLUMNS]]
+    pool.to_parquet(PROC_DIR / "labeling_pool_v0.parquet", index=False)
+    pool.to_csv(PROC_DIR / "labeling_pool_v0.csv", index=False, encoding="utf-8-sig")
+    return pool
+
+
+def pool_only() -> None:
+    """Rebuild the labelling pool from saved outputs (seconds; no re-embedding)."""
+    clean = pd.read_parquet(PROC_DIR / "clean_v0.parquet")
+    emb = np.load(PROC_DIR / "clean_v0_embeddings.npy")
+    pool = make_labeling_pool(clean, emb)
+    print(f"Rebuilt {PROC_DIR / 'labeling_pool_v0.csv'}: {len(pool):,} rows, columns: {list(pool.columns)}")
 
 
 # ------------------------------------------------------------------ report
@@ -368,8 +386,9 @@ def write_report(f: Funnel, clean, pool, removed, n_masked, n_conflict, cross_pa
     L.append("## 5. Labeling pool for B\n")
     L.append(f"`data/processed/labeling_pool_v0.parquet` / `.csv`: {len(pool):,} attacks to label "
              f"(all cleaned deepset, Gandalf and jailbreak attacks + {int((pool.source == 'tensortrust').sum()):,} "
-             "Tensor Trust candidates chosen by k-means cluster sampling for diversity). Empty columns to fill: "
-             "`strategy_primary`, `strategy_secondary`, `ambiguous`, `obfuscated`, `notes`.\n")
+             "Tensor Trust candidates chosen by k-means cluster sampling for diversity). Columns for B: "
+             "`type` (pre-filled), `strategy_primary`, `strategy_secondary`, `ambiguous`, `obfuscated`, "
+             "`label_method`, `verified_by`, `label_notes`.\n")
     L.append("| Source | Rows |")
     L.append("|---|---:|")
     for s, n in pool["source"].value_counts().items():
@@ -385,4 +404,5 @@ def write_report(f: Funnel, clean, pool, removed, n_masked, n_conflict, cross_pa
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    pool_only() if "--pool-only" in sys.argv else run()

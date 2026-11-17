@@ -24,6 +24,7 @@ STRATEGIES = ["S1", "S2", "S3"]
 TYPES = ["injection", "jailbreak"]
 SUBSETS = ["main", "calibration", "notinject"]
 SPLIT_VALUES = ["train", "val", "test", "excluded"]
+LABEL_METHODS = ["rule", "llm", "manual"]
 
 # One column per split scheme / fold. Value = role of the row in that fold.
 SPLIT_COLUMNS = (
@@ -50,9 +51,16 @@ COLUMNS = {
     "strategy_secondary": ("object",  "B", "List of zero or more of S1-S3 (attacks only)"),
     "ambiguous":          ("boolean", "B", "True if the primary strategy is unclear (excluded from LOSO tests)"),
     "obfuscated":         ("boolean", "B", "Natural obfuscation present in the original text (attacks only)"),
+    "label_method":       ("string",  "B", f"How the final strategy label was decided: {LABEL_METHODS}"),
+    "verified_by":        ("string",  "B", "GitHub handle of who hand-checked the label (empty = not checked)"),
+    "label_notes":        ("string",  "B", "Free-text reason for borderline cases"),
     **{c: ("string", "A", f"Role in split '{c}': one of {SPLIT_VALUES}") for c in SPLIT_COLUMNS},
 }
-ATTACK_ONLY = ["type", "strategy_primary", "strategy_secondary", "ambiguous", "obfuscated"]
+ATTACK_ONLY = ["type", "strategy_primary", "strategy_secondary", "ambiguous", "obfuscated",
+               "label_method", "verified_by", "label_notes"]
+# columns B delivers in the labels file (plus `id`)
+LABEL_COLUMNS = ["type", "strategy_primary", "strategy_secondary", "ambiguous", "obfuscated",
+                 "label_method", "verified_by", "label_notes"]
 
 
 # ---------------------------------------------------------------- helpers
@@ -107,6 +115,7 @@ def validate(df: pd.DataFrame, labelled: bool = False, split: bool = False) -> N
     _check_values(df, "subset", SUBSETS, errors)
     _check_values(df, "type", TYPES, errors)
     _check_values(df, "strategy_primary", STRATEGIES, errors)
+    _check_values(df, "label_method", LABEL_METHODS, errors)
     for c in SPLIT_COLUMNS:
         _check_values(df, c, SPLIT_VALUES, errors)
 
@@ -149,6 +158,62 @@ def validate(df: pd.DataFrame, labelled: bool = False, split: bool = False) -> N
 
     if errors:
         raise ValueError("schema validation failed:\n  - " + "\n  - ".join(errors))
+
+
+def parse_secondary(v) -> list[str]:
+    """Accept a list, '', None, 'S2', 'S2;S3', 'S2,S3' or "['S2', 'S3']" (CSV round-trips) -> list."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return []
+    if hasattr(v, "tolist") and not isinstance(v, str):
+        v = v.tolist()
+    if isinstance(v, (list, tuple)):
+        return [str(x).strip() for x in v if str(x).strip()]
+    s = str(v).strip().strip("[]").replace("'", "").replace('"', "")
+    return [x.strip() for x in s.replace(";", ",").split(",") if x.strip()]
+
+
+def validate_labels(labels: pd.DataFrame, clean: pd.DataFrame) -> pd.DataFrame:
+    """Check B's labels file against the clean table; return it normalised (secondary as lists).
+
+    Expected columns: `id` + LABEL_COLUMNS (missing optional columns are added empty)."""
+    errors: list[str] = []
+    labels = labels.copy()
+    if "id" not in labels.columns:
+        raise ValueError("labels file has no `id` column")
+    for c in LABEL_COLUMNS:
+        if c not in labels.columns:
+            labels[c] = None
+    extra = [c for c in labels.columns if c not in ["id", *LABEL_COLUMNS]]
+    if extra:
+        labels = labels.drop(columns=extra)       # e.g. text/source copied from the pool: ignored
+    dup = labels["id"][labels["id"].duplicated()]
+    if len(dup):
+        errors.append(f"id: {len(dup)} duplicated ids, e.g. {dup.head(3).tolist()}")
+    known = clean.set_index("id")["label"]
+    unknown = labels.loc[~labels["id"].isin(known.index), "id"]
+    if len(unknown):
+        errors.append(f"id: {len(unknown)} ids not in the clean table, e.g. {unknown.head(3).tolist()}")
+    benign = labels["id"].map(known) == 0
+    if benign.any():
+        errors.append(f"{int(benign.sum())} labelled rows are benign in the clean table")
+    labels["strategy_secondary"] = labels["strategy_secondary"].map(parse_secondary)
+    for c in ["ambiguous", "obfuscated"]:
+        labels[c] = labels[c].map(lambda v: None if v is None or (isinstance(v, float) and pd.isna(v))
+                                  else str(v).strip().lower() in ("true", "1", "yes", "y"))
+    if labels["strategy_primary"].isna().any():
+        errors.append(f"strategy_primary: missing on {int(labels['strategy_primary'].isna().sum())} rows")
+    _check_values(labels, "strategy_primary", STRATEGIES, errors)
+    _check_values(labels, "type", TYPES, errors)
+    _check_values(labels, "label_method", LABEL_METHODS, errors)
+    flat = {s for v in labels["strategy_secondary"] for s in v}
+    if flat - set(STRATEGIES):
+        errors.append(f"strategy_secondary: invalid values {sorted(flat - set(STRATEGIES))}")
+    same = labels.apply(lambda r: r["strategy_primary"] in r["strategy_secondary"], axis=1)
+    if same.any():
+        errors.append(f"{int(same.sum())} rows list their primary strategy as secondary too")
+    if errors:
+        raise ValueError("labels validation failed:\n  - " + "\n  - ".join(errors))
+    return labels
 
 
 if __name__ == "__main__":

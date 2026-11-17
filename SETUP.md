@@ -34,6 +34,8 @@ The last line should end with `All checks passed.` The first run downloads the t
 python -m src.data.download      # ~10 min first time; saves to data/raw/ (git-ignored)
 python -m src.data.inspect_raw   # writes reports/data/raw_inspection.md
 python -m src.data.preprocess    # ~10-20 min on CPU; writes data/processed/clean_v0.parquet + labeling pool
+python -m src.data.build_dataset --labels data/processed/labels_v1.parquet   # final apig_v1.parquet + dataset card
+python -m src.data.build_dataset --fake-labels   # preview of the final format (random labels; never report results)
 ```
 
 Raw data never goes into Git. Licences are listed in `data/LICENSES.md`.

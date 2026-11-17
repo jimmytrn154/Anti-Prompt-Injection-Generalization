@@ -26,9 +26,27 @@
 | `strategy_secondary` | list | B | Zero or more of `S1`–`S3` (`[]` for none). Attacks only |
 | `ambiguous` | bool | B | Primary strategy unclear → excluded from LOSO test sets |
 | `obfuscated` | bool | B | Natural obfuscation in the original text. Attacks only |
+| `label_method` | string | B | Method that determined the **final** strategy label: `rule` / `llm` / `manual` |
+| `verified_by` | string | B | GitHub handle(s) of whoever hand-checked the label; empty = not checked |
+| `label_notes` | string | B | Free-text reason for borderline cases |
 | split columns | string | A | See below |
 
 Attack-only columns are empty (null) for benign rows.
+
+## Labelling workflow (agreed A + B, Nov 17)
+
+1. A shares `labeling_pool_v0.csv` (attacks only, label columns empty; `type` pre-filled by source).
+2. B labels with rules + an LLM pass and delivers **`labels_v1.parquet`**: `id` + the 8 label columns. A's `build_dataset.py` merges it by `id`; neither edits the other's files. `schema.validate_labels()` checks it first.
+3. **`label_method` vs `verified_by`** are independent:
+
+   | Case | `label_method` | `verified_by` |
+   |---|---|---|
+   | LLM label, nobody checked it | `llm` | empty |
+   | LLM label, a person checked it and agreed | `llm` | `ivory4326` |
+   | A person checked it and changed it | `manual` | `ivory4326` |
+   | Adjudicated in the 300-sample check | `manual` if it changed, else unchanged | both handles, e.g. `ivory4326;<A's handle>` |
+
+4. **300-sample agreement check** (`src/data/agreement.py`): drawn **stratified by source x automatic strategy** so every source and strategy is covered; two blind files (no automatic label shown), one per annotator; Cohen's κ, confusion matrix, κ per source and automatic-vs-human accuracy go to `reports/data/agreement_report.md`; disagreements are adjudicated together.
 
 ## Split columns
 
