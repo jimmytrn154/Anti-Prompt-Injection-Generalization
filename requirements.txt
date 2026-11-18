@@ -1,0 +1,24 @@
+# APIG shared environment (Python 3.11 recommended)
+# Install:  pip install -r requirements.txt
+# GPU users (C, D): install the CUDA build of torch first from https://pytorch.org,
+# then run this file; pip will keep your existing torch.
+
+# data loading and storage
+datasets>=2.19
+pandas>=2.1
+pyarrow>=15.0
+numpy>=1.26
+
+# ML
+scikit-learn>=1.4
+torch>=2.2
+transformers>=4.40
+sentence-transformers>=3.0
+
+# preprocessing (workstream A)
+lingua-language-detector>=2.0
+
+# utilities
+tqdm>=4.66
+matplotlib>=3.8
+jupyter

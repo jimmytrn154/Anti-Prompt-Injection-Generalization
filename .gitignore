@@ -1,0 +1,40 @@
+# --- data: never commit datasets (licences: Alpaca is CC BY-NC, Dolly is CC BY-SA) ---
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+*.parquet
+*.jsonl
+*.jsonl.bz2
+*.csv.gz
+
+# --- model files and caches ---
+models/
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+.cache/
+hf_cache/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# --- notebooks ---
+.ipynb_checkpoints/
+
+# --- secrets (API keys for the LLM labelling pass, etc.) ---
+.env
+*.key
+
+# --- OS / editors ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
