@@ -34,7 +34,7 @@ A = attack (`y=1`), B = benign (`y=0`). Counts are from the current build; final
 | [deepset/prompt-injections](https://huggingface.co/datasets/deepset/prompt-injections) | A+B | 263 A / 399 B | 206 A / 247 B | all A; B length-matched | EN + DE (~40% German) |
 | [Lakera Gandalf](https://huggingface.co/datasets/Lakera/gandalf_ignore_instructions) | A | 1,000 | 814 | 814 | |
 | [jackhhao/jailbreak-classification](https://huggingface.co/datasets/jackhhao/jailbreak-classification) | A+B | 666 A / 640 B | 337 A / 607 B | all A; B length-matched | Jailbreak type; reported separately |
-| [Tensor Trust](https://github.com/HumanCompatibleAI/tensor-trust-data) (raw dump v2) | A | 563,349 | 4,256 | 1,300 **(changed: ≤1.2k → 1.3k)** | Successful, non-self, distinct attacks; "access granted" removed; per-strategy quotas |
+| [Tensor Trust](https://github.com/HumanCompatibleAI/tensor-trust-data) (raw dump v2) | A | 563,349 | 4,256 | 1,300 **(changed: ≤1.2k → 1.3k)** | Successful, non-self, distinct attacks; "access granted" replaced by varied ordinary phrases; per-strategy quotas |
 | [Dolly-15k](https://huggingface.co/datasets/databricks/databricks-dolly-15k) / [Alpaca](https://huggingface.co/datasets/tatsu-lab/alpaca) | B | 15,011 / 52,002 | 13,349 / 19,172 | length-matched filler + calibration pool | Dolly = instruction **+ context** **(changed)** for long benign prompts |
 | [NotInject](https://huggingface.co/datasets/leolee99/NotInject) | B (hard) | 339 | 337 | 337, **test only** (RQ3) | Includes a *Multilingual* category (~82 rows, mostly Chinese) |
 
@@ -42,9 +42,9 @@ A = attack (`y=1`), B = benign (`y=0`). Counts are from the current build; final
 
 **Preprocessing** (`src/data/preprocess.py`; report in [reports/data/preprocess_report.md](reports/data/preprocess_report.md)):
 
-1. Tensor Trust: keep successful, non-self, non-password, distinct attacks (563,349 → 9,829); delete the game phrase "access granted" (a placeholder token would itself be a shortcut).
+1. Tensor Trust: keep successful, non-self, non-password, distinct attacks (563,349 → 9,829). The game phrase "access granted" (in ~50% of these attacks, in no other source) is **replaced by one of 34 ordinary phrases** ("Welcome", "Approved", …) chosen per attack. Deleting it left empty quotes in 26% of Tensor Trust attacks and a single placeholder would itself be a shortcut; the phrases were picked because they are naturally rare in attacks, and the dataset card checks that no pattern marks attacks (each ≤ 1.6% of attacks).
 2. Length filter **5–500 tokens (changed from 5–300)**: 58% of jailbreak attacks are > 300 tokens; 500 keeps ~2/3 of them and stays under every model's 512-token limit.
-3. Language filter: English; English + German for deepset; NotInject kept as published. Repeated padding is collapsed and homoglyph words are treated as obfuscation before detection, so padded English attacks are not misread as German/Italian/Russian.
+3. Language filter: English; English + German for deepset; NotInject kept as published. Repeated padding is collapsed and homoglyph words are treated as obfuscation before detection, so padded English attacks are not misread as German/Italian/Russian; short Chinese/Japanese/Korean texts are recognised by their script.
 4. Exact duplicates across all sources; near-duplicates (embedding cosine > 0.9) within each class, greedy so that dissimilar texts are never chained together.
 5. Tensor Trust candidate pool for labelling by k-means cluster sampling (3,000 diverse attacks).
 6. Fixed seeds; every removed row is logged with its reason.
@@ -214,7 +214,7 @@ Group 7: Duong Hien Chi Kien, Tran Anh Chuong, Sangah Park, Allaberdi Zinkhaydar
 
 - **Single-text input ignores trust boundaries**, so indirect injection is out of scope.
 - **Strategy and source remain partly confounded across datasets.** LODO and within-source LOSO quantify this but do not fully remove it.
-- **Label noise in public datasets:** some deepset "attacks" are harmless requests behind a task switch, i.e. attacks only relative to an unstated application; these are flagged as ambiguous where unclear.
+- **Label noise in public datasets:** some deepset "attacks" are harmless requests behind a task switch, i.e. attacks only relative to an unstated application. Tensor Trust records game attempts, not labelled attacks: in an 80-row audit ~6% were not attacks (removed in labelling as NOT_ATTACK) and ~24% only work as attacks inside the game (marked ambiguous).
 - **Length matching** removes a real-world difference between classes on purpose; LODO test benign data is partly drawn from Dolly/Alpaca rather than only the held-out source.
 
 ## References
