@@ -31,6 +31,7 @@ import pandas as pd
 from src.data.check_env import EMBEDDING_MODEL, TOKENIZER_NAME
 from src.data.schema import COLUMNS, empty_frame, make_id, validate
 from src.data.sources import REPO_ROOT, load_raw
+from src.data.textfix import ACCESS_GRANTED, cjk_language, mask_access_granted
 
 # ------------------------------------------------------------------ settings (change here only)
 MIN_TOK, MAX_TOK = 5, 500        # team decision Nov 17: 300 -> 500 (keeps 2/3 of jailbreaks, < 512 for every tokenizer)
@@ -39,7 +40,8 @@ ALPACA_POOL = 20_000             # Alpaca rows kept before language filtering / 
 TT_POOL = 3_000                  # Tensor Trust candidates handed to B for labelling (final sample <= ~1.2k)
 TT_CLUSTERS = 300
 SEED = 42
-MASK_WITH = ""                   # replacement for "access granted"; a placeholder token would itself become a shortcut
+# "access granted" is replaced by varied ordinary phrases (see textfix.py): deleting it left empty
+# quotes in ~26% of Tensor Trust attacks, and a single placeholder would itself be a shortcut.
 ALLOWED_LANG = {"deepset": {"en", "de"}}   # every other source: {"en"}; NotInject: no filter
 NO_LANG_FILTER = {"notinject"}
 # priority when the same text appears in several sources: keep the earliest in this list
@@ -82,10 +84,15 @@ def language_view(text: str) -> str | None:
 
 def detect_languages(texts: list[str]) -> list[str]:
     """ISO 639-1 code, or 'und' when the detector is not confident (short, padded or obfuscated text)."""
-    views = [language_view(t) for t in texts]
-    todo = [i for i, v in enumerate(views) if v is not None]
-    codes = _detect([views[i] for i in todo])
     out = ["und"] * len(texts)
+    todo = []
+    for i, t in enumerate(texts):
+        cjk = cjk_language(t)          # short CJK texts: decide by script (the detector says 'und')
+        if cjk:
+            out[i] = cjk
+        elif language_view(t) is not None:
+            todo.append(i)
+    codes = _detect([language_view(texts[i]) for i in todo])
     for i, c in zip(todo, codes):
         out[i] = c
     return out
@@ -208,12 +215,10 @@ def run() -> None:
     df = f.drop(df, df["text"].str.strip() == "", "load", "empty text")
     f.record("raw", df)
 
-    print("[2] masking 'access granted' in Tensor Trust", flush=True)
+    print("[2] replacing 'access granted' in Tensor Trust", flush=True)
     tt = df["source"] == "tensortrust"
-    pat = re.compile(r"access\s*granted", re.IGNORECASE)
-    n_masked = int(df.loc[tt, "text"].str.contains(pat).sum())
-    df.loc[tt, "text"] = (df.loc[tt, "text"].str.replace(pat, MASK_WITH, regex=True)
-                          .str.replace(r"[ \t]{2,}", " ", regex=True).str.strip())
+    n_masked = int(df.loc[tt, "text"].str.contains(ACCESS_GRANTED).sum())
+    df.loc[tt, "text"] = [mask_access_granted(t, i) for t, i in zip(df.loc[tt, "text"], df.loc[tt, "id"])]
     df = f.drop(df, df["text"].str.strip() == "", "mask", "empty after masking")
 
     print("[3] token counts and length filter", flush=True)
@@ -336,7 +341,7 @@ def write_report(f: Funnel, clean, pool, removed, n_masked, n_conflict, cross_pa
     for name, r in fun.iterrows():
         L.append(f"| {name} | " + " | ".join(f"{v:,}" for v in r) + " |")
     L.append("")
-    L.append(f"- Tensor Trust attacks with \"access granted\" removed: {n_masked:,}")
+    L.append(f"- Tensor Trust attacks with \"access granted\" replaced by an ordinary phrase: {n_masked:,}")
     L.append(f"- Rows dropped because the same text appeared with both labels: {n_conflict:,}")
     L.append(f"- Attack/benign pairs above the near-duplicate threshold (kept, worth a look): {cross_pairs:,}\n")
 

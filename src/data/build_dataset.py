@@ -12,7 +12,8 @@ Outputs: data/processed/apig_v1.parquet           final table (schema-valid, lab
 the real labels exist. Its output is apig_v1_FAKE.parquet. Never report results from it.
 
 Steps
-  1. merge labels by id; attacks without labels are dropped (Tensor Trust rows outside the pool)
+  1. merge labels by id; attacks without labels are dropped (Tensor Trust rows outside the pool);
+     text fixes: Tensor Trust "access granted" replaced by varied phrases, short CJK texts removed
   2. Tensor Trust: per-strategy quotas (equal shares, unused share redistributed), non-ambiguous first
   3. benign: keep all deepset/jailbreak benign (needed for LODO), fill up to a 1:1 ratio from
      Dolly/Alpaca so every length bin has as many benign as attack rows
@@ -30,7 +31,8 @@ import pandas as pd
 
 from src.data.schema import (ATTACK_SOURCES, COLUMNS, LABEL_COLUMNS, SPLIT_COLUMNS, STRATEGIES,
                              validate, validate_labels)
-from src.data.sources import REPO_ROOT
+from src.data.sources import REPO_ROOT, RAW_DIR, TENSORTRUST_FILE
+from src.data.textfix import MARKERS, cjk_language, mask_access_granted
 
 PROC_DIR = REPO_ROOT / "data" / "processed"
 REPORT_DIR = REPO_ROOT / "reports" / "data"
@@ -89,6 +91,64 @@ def fake_labels(attacks: pd.DataFrame) -> pd.DataFrame:
         "ambiguous": rng.random(len(a)) < 0.05, "obfuscated": rng.random(len(a)) < 0.1,
         "label_method": "rule", "verified_by": None, "label_notes": "FAKE LABEL",
     })
+
+
+# ------------------------------------------------------------------ 1b. text fixes (Nov 19)
+def fix_texts(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Apply text fixes found after preprocessing, without changing any id (so labels stay valid).
+
+    a) Tensor Trust: rebuild each text from the raw dump and REPLACE "access granted" with an ordinary
+       phrase (clean_v0 deleted it, leaving empty quotes in ~26% of Tensor Trust attacks: a shortcut).
+    b) Short Chinese/Japanese/Korean texts that the language detector could not decide are removed
+       from sources where only English (deepset: English/German) is allowed. NotInject is untouched.
+    """
+    import bz2
+    import json
+
+    from src.data.preprocess import ALLOWED_LANG, MAX_TOK, MIN_TOK, NO_LANG_FILTER, count_tokens
+
+    info = {}
+    tt = df["source"] == "tensortrust"
+    want = {int(i.split("_", 1)[1]): i for i in df.loc[tt, "id"]}
+    raw = {}
+    path = RAW_DIR / "tensortrust" / TENSORTRUST_FILE
+    with bz2.open(path, "rt", encoding="utf-8") as f:
+        for line in f:
+            r = json.loads(line)
+            aid = r.get("attack_id")
+            if aid in want and aid not in raw:
+                raw[aid] = r.get("attacker_input") or ""
+    missing = set(want) - set(raw)
+    if missing:
+        raise SystemExit(f"{len(missing)} Tensor Trust ids not found in the raw dump, e.g. {sorted(missing)[:3]}")
+    new_text = df.loc[tt, "id"].map(lambda i: mask_access_granted(raw[int(i.split("_", 1)[1])], i))
+    changed = tt & (df["text"] != new_text.reindex(df.index))
+    df.loc[tt, "text"] = new_text
+    if changed.any():
+        df.loc[changed, "n_tokens"] = count_tokens(df.loc[changed, "text"].tolist())
+    too_long = changed & ((df["n_tokens"] > MAX_TOK) | (df["n_tokens"] < MIN_TOK))   # keep the 5-500 range
+    info["tt_rewritten"], info["tt_too_long"] = int(changed.sum()), int(too_long.sum())
+    df = df[~too_long]
+
+    cjk = pd.Series([cjk_language(str(t)) for t in df["text"]], index=df.index, dtype=object)
+    allowed = df["source"].map(lambda s: ALLOWED_LANG.get(s, {"en"}))
+    ok = pd.Series([isinstance(c, str) and c in a for c, a in zip(cjk, allowed)], index=df.index)
+    drop = cjk.notna() & ~df["source"].isin(NO_LANG_FILTER) & ~ok
+    df.loc[cjk.notna(), "language"] = cjk[cjk.notna()]
+    info["cjk_removed"] = df.loc[drop, "source"].value_counts().to_dict()
+    return df[~drop].reset_index(drop=True), info
+
+
+def marker_table(df: pd.DataFrame) -> pd.DataFrame:
+    """How often each marker pattern appears in main attacks vs main benign texts."""
+    main = df[df["subset"] == "main"]
+    a, b = main[main["label"] == 1]["text"], main[main["label"] == 0]["text"]
+    rows = []
+    for name, pat in MARKERS.items():
+        pa, pb = a.str.contains(pat).mean(), b.str.contains(pat).mean()
+        rows.append({"marker": name, "attacks": pa, "benign": pb,
+                     "flag": pa >= 0.02 and pa >= 5 * max(pb, 0.001)})
+    return pd.DataFrame(rows).sort_values("attacks", ascending=False)
 
 
 # ------------------------------------------------------------------ 2-4. sampling
@@ -264,6 +324,8 @@ def main() -> None:
 
     print("[1] loading clean table and labels", flush=True)
     df = load_inputs(args.labels, fake)
+    print("    text fixes: Tensor Trust 'access granted' replacement, CJK language check", flush=True)
+    df, fix_info = fix_texts(df)
 
     print("[2] sampling Tensor Trust with per-strategy quotas", flush=True)
     tt_keep = sample_tensortrust(df, TT_TOTAL, rng)
@@ -297,13 +359,17 @@ def main() -> None:
     validate(df, labelled=True, split=True)
     confirmations = leak_checks(df)
     aurocs = {c: length_only_auroc(df, c) for c in SPLIT_COLUMNS}
+    markers = marker_table(df)
+    if markers["flag"].any():
+        print("  WARNING: marker patterns much more common in attacks than benign: "
+              f"{markers.loc[markers['flag'], 'marker'].tolist()}")
 
     name = "apig_v1_FAKE.parquet" if fake else "apig_v1.parquet"
     df.to_parquet(PROC_DIR / name, index=False)
-    write_card(df, name, fake, confirmations, aurocs, short_main, short_calib, time.time() - t0)
+    write_card(df, name, fake, confirmations, aurocs, short_main, short_calib, time.time() - t0, fix_info, markers)
 
 
-def write_card(df, name, fake, confirmations, aurocs, short_main, short_calib, secs) -> None:
+def write_card(df, name, fake, confirmations, aurocs, short_main, short_calib, secs, fix_info, markers) -> None:
     L = [f"# Dataset card: `{name}`\n"]
     if fake:
         L.append("> **FAKE LABELS.** Strategies were assigned at random to preview the file format. "
@@ -346,10 +412,20 @@ def write_card(df, name, fake, confirmations, aurocs, short_main, short_calib, s
              "train part and scored on its test part. Close to 0.5 = length does not give the label away; far from 0.5 in *either* direction "
              "(e.g. 0.1 or 0.9) = length separates the classes.\n")
 
-    L.append("## 4. Checks passed\n")
+    L.append("## 4. Shortcut markers (main split)\n")
+    L.append(f"Text fixes applied at build time: {fix_info['tt_rewritten']:,} Tensor Trust texts had \"access granted\" "
+             f"replaced by an ordinary phrase ({fix_info['tt_too_long']} then fell outside the token range and were dropped); "
+             f"short CJK texts removed: {fix_info['cjk_removed'] or 'none'}.\n")
+    L.append("| Pattern | In attacks | In benign | Flag |")
+    L.append("|---|---:|---:|---|")
+    for r in markers.itertuples():
+        if r.attacks > 0 or r.benign > 0:
+            L.append(f"| {r.marker} | {r.attacks:.1%} | {r.benign:.1%} | {'⚠' if r.flag else ''} |")
+    L.append("\n⚠ = at least 2% of attacks and 5x more common than in benign text (a possible shortcut).\n")
+    L.append("## 5. Checks passed\n")
     L.extend(f"- {c}" for c in confirmations)
     L.append("")
-    L.append("## 5. How to use\n")
+    L.append("## 6. How to use\n")
     L.append("```python\nimport pandas as pd\n"
              f"df = pd.read_parquet('data/processed/{name}')\n"
              "train = df[df.loso_S2 == 'train']; val = df[df.loso_S2 == 'val']; test = df[df.loso_S2 == 'test']\n"
