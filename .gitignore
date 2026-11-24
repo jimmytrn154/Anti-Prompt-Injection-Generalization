@@ -9,8 +9,12 @@ reports/labeling/
 *.jsonl.bz2
 *.csv.gz
 
+# --- results from FAKE labels must never be shared ---
+results/*FAKE*/
+
 # --- model files and caches ---
-models/
+/models/
+results/**/models/
 checkpoints/
 *.pt
 *.bin
