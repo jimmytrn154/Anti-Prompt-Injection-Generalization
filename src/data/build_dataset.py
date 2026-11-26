@@ -191,6 +191,28 @@ def match_by_length(target_counts: pd.Series, candidates: pd.DataFrame, rng) -> 
     return (pd.Index(np.concatenate(chosen)) if chosen else pd.Index([])), short
 
 
+def shape_match(att_tokens: pd.Series, pool: pd.DataFrame, rng, n: int | None = None) -> pd.Index:
+    """Pick benign rows from `pool` whose length-bin PROPORTIONS match the attacks'.
+
+    n = number of rows to pick; None = as many as possible while keeping the proportions.
+    Length bins with no benign candidates are skipped (cannot be matched)."""
+    props = length_bin(att_tokens).value_counts(normalize=True)
+    pbins = length_bin(pool["n_tokens"])
+    avail = pbins.value_counts().reindex(props.index, fill_value=0)
+    usable = props[avail > 0]
+    if usable.empty:
+        return pd.Index([])
+    usable = usable / usable.sum()
+    if n is None:
+        n = int(np.floor((avail[usable.index] / usable).min()))
+    chosen = []
+    for b, pr in usable.items():
+        k = min(int(round(pr * n)), int(avail[b]))
+        if k:
+            chosen.append(rng.choice(pool.index[pbins == b], size=k, replace=False))
+    return pd.Index(np.concatenate(chosen)) if chosen else pd.Index([])
+
+
 # ------------------------------------------------------------------ 5. splits
 def _is_list(v) -> bool:
     return isinstance(v, (list, tuple, np.ndarray))
@@ -237,14 +259,27 @@ def assign_splits(df: pd.DataFrame, rng) -> pd.DataFrame:
     sec_has = lambda s: df["strategy_secondary"].map(lambda v: _is_list(v) and s in list(v))  # noqa: E731
     amb = _flag(df["ambiguous"])
 
-    # (ii) LOSO and (iii) within-source LOSO
+    # (ii) LOSO and (iii) within-source LOSO.
+    # Strategies differ in length (S2 role-play jailbreaks are long, S1 overrides short), so benign rows are
+    # length-matched PER FOLD: the test benign has the length profile of that fold's held-out attacks, and the
+    # training benign has the profile of that fold's training attacks. Otherwise length alone separates the
+    # classes (with real labels, an unmatched loso_S2 gave a length-only AUROC of 0.22).
+    n_test_ben = int((ben & (ben_role == "test")).sum())          # same test size as the random split
+    ben_rows = df[ben]
+    tt_atk = atk & (df["source"] == "tensortrust")
+
+    def loso_fold(col: str, attacks: pd.Series, involved: pd.Series, test_atk: pd.Series) -> None:
+        test_ben = shape_match(df.loc[test_atk, "n_tokens"], ben_rows, rng, n=n_test_ben)
+        train_atk = attacks & ~involved
+        train_ben = shape_match(df.loc[train_atk, "n_tokens"], ben_rows.drop(index=test_ben), rng)
+        finish(col, train_mask=train_atk | df.index.isin(train_ben),
+               test_mask=test_atk | df.index.isin(test_ben))
+
     for s in STRATEGIES:
         involved = atk & ((df["strategy_primary"] == s) | sec_has(s))
         test_atk = atk & (df["strategy_primary"] == s) & ~amb
-        ben_test, ben_train = ben & (ben_role == "test"), ben & (ben_role != "test")
-        finish(f"loso_{s}", train_mask=(atk & ~involved) | ben_train, test_mask=test_atk | ben_test)
-        tt_atk = atk & (df["source"] == "tensortrust")
-        finish(f"wsloso_{s}", train_mask=(tt_atk & ~involved) | ben_train, test_mask=(test_atk & tt_atk) | ben_test)
+        loso_fold(f"loso_{s}", atk, involved, test_atk)
+        loso_fold(f"wsloso_{s}", tt_atk, involved, test_atk & tt_atk)
 
     # (iv) LODO: hold out each attack source with its own benign data. The test benign is length-matched
     # to the held-out attacks (otherwise length alone separates e.g. long jailbreak attacks from short
@@ -260,8 +295,10 @@ def assign_splits(df: pd.DataFrame, rng) -> pd.DataFrame:
         got = length_bin(df.loc[own_pick, "n_tokens"]).value_counts().reindex(a_cnt.index, fill_value=0)
         top_up, _ = match_by_length((a_cnt - got).clip(lower=0), filler_ben, rng)
         test_mask = test_atk | df.index.isin(own_pick) | df.index.isin(top_up)
-        train_mask = main & ~test_mask & (df["source"] != src)
-        finish(f"lodo_{src}", train_mask=train_mask, test_mask=test_mask)
+        train_atk = atk & ~test_mask & (df["source"] != src)
+        train_pool = df[ben & ~test_mask & (df["source"] != src)]
+        train_ben = shape_match(df.loc[train_atk, "n_tokens"], train_pool, rng)   # training benign matched too
+        finish(f"lodo_{src}", train_mask=train_atk | df.index.isin(train_ben), test_mask=test_mask)
     return df
 
 

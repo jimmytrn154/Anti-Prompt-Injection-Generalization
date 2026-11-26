@@ -172,12 +172,55 @@ def parse_secondary(v) -> list[str]:
     return [x.strip() for x in s.replace(";", ",").split(",") if x.strip()]
 
 
+def normalize_method(v) -> str | None:
+    """Map B's detailed workflow names onto the schema's three methods (Nov 26 hand-off used e.g.
+    'bulk_proposal_user_approved', 'manual_context_review'). The original value is kept in label_notes.
+      - LLM proposal (approved or reviewed by a person)   -> 'llm'   (the person is in verified_by)
+      - keyword-rule proposal approved by a person         -> 'rule'
+      - label decided or corrected by a person             -> 'manual'"""
+    if v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() == "":
+        return None
+    s = str(v).strip().lower()
+    if s in LABEL_METHODS:
+        return s
+    if s.startswith("rule"):
+        return "rule"
+    if "manual" in s or "correction" in s or "qa" in s:
+        return "manual"
+    if "proposal" in s or "approved" in s or s == "reviewed":
+        return "llm"
+    return s                                             # unknown: left as is, validation will report it
+
+
+def normalize_labels(labels: pd.DataFrame) -> pd.DataFrame:
+    """Make a labels file from B's pipeline schema-conformant without changing any decision:
+    map label_method (original kept in label_notes), parse text booleans and 'S2;S3' secondaries,
+    and drop a primary strategy that is repeated in the secondary list."""
+    labels = labels.copy()
+    if "label_notes" not in labels.columns:
+        labels["label_notes"] = None
+    if "label_method" in labels.columns:
+        orig = labels["label_method"]
+        mapped = orig.map(normalize_method)
+        changed = orig.notna() & (orig.astype(str).str.strip().str.lower() != mapped.astype(str))
+        note = "orig_method=" + orig.astype(str)
+        labels.loc[changed, "label_notes"] = [
+            n if (not isinstance(old, str) or not old.strip()) else f"{old}; {n}"
+            for old, n in zip(labels.loc[changed, "label_notes"], note[changed])]
+        labels["label_method"] = mapped
+    if "strategy_secondary" in labels.columns:
+        labels["strategy_secondary"] = [
+            [x for x in parse_secondary(sec) if x != prim]
+            for sec, prim in zip(labels["strategy_secondary"], labels.get("strategy_primary", [None] * len(labels)))]
+    return labels
+
+
 def validate_labels(labels: pd.DataFrame, clean: pd.DataFrame) -> pd.DataFrame:
     """Check B's labels file against the clean table; return it normalised (secondary as lists).
 
     Expected columns: `id` + LABEL_COLUMNS (missing optional columns are added empty)."""
     errors: list[str] = []
-    labels = labels.copy()
+    labels = normalize_labels(labels)
     if "id" not in labels.columns:
         raise ValueError("labels file has no `id` column")
     for c in LABEL_COLUMNS:
